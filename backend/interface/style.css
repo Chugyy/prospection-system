@@ -1,0 +1,79 @@
+/* Additional custom styles */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+.transition {
+  transition: all 0.2s ease;
+}
+
+.sticky {
+  position: sticky;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.hover\:bg-green-600:hover {
+  background-color: #16a34a;
+}
+
+.hover\:bg-red-600:hover {
+  background-color: #dc2626;
+}
+
+.hover\:bg-gray-50:hover {
+  background-color: #f9fafb;
+}
+
+.hover\:underline:hover {
+  text-decoration: underline;
+}
+
+/* Apple-style Toggle Switch */
+.toggle-button {
+  position: relative;
+  width: 60px;
+  height: 34px;
+  border-radius: 34px;
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+  outline: none;
+}
+
+.toggle-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.toggle-off {
+  background-color: #d1d5db; /* gray-300 */
+}
+
+.toggle-on {
+  background-color: #34c759; /* iOS green */
+}
+
+.toggle-slider {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 28px;
+  height: 28px;
+  background-color: white;
+  border-radius: 50%;
+  transition: transform 0.3s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-on .toggle-slider {
+  transform: translateX(26px);
+}

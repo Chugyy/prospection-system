@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+# app/core/job/reply.py
+
+from config.logger import logger
+from app.database import crud
+
+
+async def process_unread_messages() -> dict:
+    """
+    Génère des réponses intelligentes pour les messages non lus.
+
+    Processus:
+    1. Récupérer chats avec messages non lus via Unipile
+    2. Matcher avec prospects en DB via attendee_provider_id
+    3. Pour chaque nouveau message prospect:
+       - Sync messages en DB
+       - Récupérer historique conversation
+       - Générer réponse via orchestrateur LLM
+       - Créer action 'send_reply' en queue (logs table)
+    4. Respecter quotas et rate limits
+
+    Returns:
+        dict: {"analyzed": int, "replies_generated": int, "failed": int}
+    """
+    from app.core.services.unipile.api.endpoints.messaging import get_chats, get_chat_messages
+    from app.core.services.llm.orchestrator import orchestrator
+    from config.config import settings
+
+    try:
+        logger.info("🤖 Starting reply worker - analyzing unread messages")
+
+        # 1. Récupérer chats avec messages non lus
+        chats_data = get_chats(account_id=settings.UNIPILE_ACCOUNT_ID, limit=200)
+        all_chats = chats_data.get('items', [])
+
+        unread_chats = [c for c in all_chats if c.get('unread_count', 0) > 0]
+        logger.info(f"Found {len(unread_chats)} chats with unread messages")
+
+        if not unread_chats:
+            return {"analyzed": 0, "replies_generated": 0, "failed": 0}
+
+        analyzed = 0
+        replies_generated = 0
+        failed = 0
+
+        for chat in unread_chats:
+            try:
+                attendee_id = chat.get('attendee_provider_id')
+                chat_id = chat.get('id')
+
+                if not attendee_id or not chat_id:
+                    continue
+
+                # 2. Trouver le prospect via attendee_provider_id
+                prospect = await crud.get_prospect_by_linkedin_identifier(attendee_id)
+
+                # Si prospect inconnu, SKIP (sera traité par connection worker)
+                if not prospect:
+                    logger.info(f"No prospect found for attendee_id {attendee_id}, skipping (will be handled by connection worker)")
+                    continue
+
+                prospect_id = prospect['id']
+                account_id = prospect['account_id']
+
+                # Vérifier si prospect peut être traité
+                should_process, reason = await crud.should_process_prospect(prospect_id)
+                if not should_process:
+                    logger.info(f"Skipping prospect {prospect_id}: {reason}")
+                    continue
+
+                # 3. Récupérer TOUS les messages du chat
+                messages_data = get_chat_messages(
+                    chat_id=chat_id,
+                    account_id=settings.UNIPILE_ACCOUNT_ID,
+                    limit=100
+                )
+
+                messages = messages_data.get('items', [])
+                logger.info(f"Retrieved {len(messages)} messages from chat {chat_id}")
+
+                # 4. Sync nouveaux messages en DB
+                new_messages_count = 0
+                last_prospect_message = None
+
+                for msg in reversed(messages):  # Ordre chronologique
+                    unipile_msg_id = msg.get('id')
+                    if not unipile_msg_id:
+                        continue
+
+                    # Vérifier si message existe déjà
+                    existing = await crud.get_message_by_unipile_id(unipile_msg_id)
+                    if existing:
+                        continue
+
+                    # Déterminer sent_by
+                    is_sender = msg.get('is_sender', 0)
+                    sent_by = 'account' if is_sender == 1 else 'prospect'
+
+                    # Parser timestamp
+                    from datetime import datetime
+                    timestamp_str = msg.get('timestamp')
+                    sent_at = None
+                    if timestamp_str:
+                        try:
+                            sent_at = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                            if sent_at.tzinfo is not None:
+                                sent_at = sent_at.replace(tzinfo=None)
+                        except Exception as e:
+                            logger.warning(f"Failed to parse timestamp {timestamp_str}: {e}")
+
+                    # Insérer message
+                    message_id = await crud.create_message(
+                        prospect_id=prospect_id,
+                        account_id=account_id,
+                        sent_by=sent_by,
+                        content=msg.get('text') or '',
+                        message_type=None,
+                        sent_at=sent_at,
+                        unipile_message_id=unipile_msg_id
+                    )
+
+                    new_messages_count += 1
+                    logger.debug(f"New message synced: id={message_id}, sent_by={sent_by}")
+
+                    # Garder le dernier message du prospect
+                    if sent_by == 'prospect':
+                        last_prospect_message = msg.get('text') or ''
+
+                if new_messages_count == 0:
+                    logger.debug(f"No new messages for prospect {prospect_id}")
+                    continue
+
+                # 5. Vérifier s'il y a un message du prospect à traiter
+                if not last_prospect_message or last_prospect_message.strip() == '':
+                    logger.debug(f"No prospect message to reply to for prospect {prospect_id}")
+                    continue
+
+                analyzed += 1
+
+                # 6. GARDE: Vérifier si dernier message vient déjà de nous
+                messages_history = await crud.list_messages(prospect_id=prospect_id)
+                if messages_history and messages_history[0]['sent_by'] == 'account':
+                    logger.info(f"Last message from account for prospect {prospect_id}, skipping reply")
+                    continue
+
+                # Construire historique au format orchestrateur
+                conversation_history = []
+                for msg in reversed(messages_history):  # Plus ancien en premier
+                    role = "user" if msg['sent_by'] == 'prospect' else "assistant"
+                    conversation_history.append({
+                        "role": role,
+                        "content": msg['content']
+                    })
+
+                # 7. Générer réponse via orchestrateur LLM
+                logger.info(f"Generating LLM reply for prospect {prospect_id}")
+
+                response = await orchestrator.generate_response(
+                    prospect_message=last_prospect_message,
+                    conversation_history=conversation_history,
+                    prospect_profile={
+                        "first_name": prospect.get('first_name', ''),
+                        "last_name": prospect.get('last_name', ''),
+                        "job_title": prospect.get('job_title', ''),
+                        "company": prospect.get('company', ''),
+                        "headline": prospect.get('headline', ''),
+                        "industry": "",
+                        "employee_count": ""
+                    }
+                )
+
+                if not response:
+                    logger.warning(f"Orchestrator returned empty response for prospect {prospect_id}")
+                    failed += 1
+                    continue
+
+                # 8. Créer action 'send_reply' en queue (via logs table)
+                import random
+                from datetime import timedelta, datetime
+
+                scheduled_at = datetime.now() + timedelta(minutes=random.randint(2, 10))
+
+                await crud.create_log(
+                    action='send_reply',
+                    prospect_id=prospect_id,
+                    account_id=account_id,
+                    source='llm',
+                    validation_status='auto_execute',
+                    status='pending',
+                    priority=1,
+                    payload={
+                        'scheduled_at': scheduled_at.isoformat(),
+                        'content': response,
+                        'last_prospect_message': last_prospect_message
+                    }
+                )
+
+                replies_generated += 1
+                logger.info(f"✅ Reply generated for prospect {prospect_id}, scheduled at {scheduled_at}")
+
+            except Exception as e:
+                failed += 1
+                logger.error(f"Error processing chat {chat.get('id')}: {e}", exc_info=True)
+
+        logger.info(f"✅ Reply worker completed: {analyzed} analyzed, {replies_generated} replies generated, {failed} failed")
+
+        return {
+            "analyzed": analyzed,
+            "replies_generated": replies_generated,
+            "failed": failed
+        }
+
+    except Exception as e:
+        logger.error(f"Fatal error in reply worker: {e}", exc_info=True)
+        raise
+
+
+async def run_reply_worker_loop():
+    """
+    Worker de génération de réponses automatiques.
+
+    Lance process_unread_messages toutes les 5 minutes.
+    Pause nocturne: 22h-6h (heure de Paris).
+    """
+    from app.core.utils.scheduler import smart_sleep
+
+    logger.info("Starting reply worker loop")
+
+    while True:
+        try:
+            await process_unread_messages()
+        except Exception as e:
+            logger.error(f"Error in reply worker loop: {e}")
+
+        await smart_sleep(300)  # 5 minutes

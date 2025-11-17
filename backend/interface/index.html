@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prospection Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="bg-gray-100">
+  <div id="app" class="container mx-auto p-6">
+
+    <!-- Header -->
+    <header class="flex justify-between items-center mb-8">
+      <h1 class="text-3xl font-bold text-gray-800">Prospection System</h1>
+
+      <div class="flex items-center gap-6">
+        <!-- Apple-style Toggle -->
+        <div class="flex items-center gap-4">
+          <span class="text-sm font-medium text-gray-600">Workflow</span>
+          <button
+            @click="toggleWorkflow"
+            :disabled="loading"
+            :class="workflowRunning ? 'toggle-on' : 'toggle-off'"
+            class="toggle-button">
+            <div class="toggle-slider"></div>
+          </button>
+        </div>
+
+        <!-- Logout Button -->
+        <button
+          @click="logout"
+          class="text-sm text-red-600 hover:text-red-800 font-medium">
+          Déconnexion
+        </button>
+      </div>
+    </header>
+
+    <!-- Status Message -->
+    <div v-if="statusMessage"
+         :class="statusMessage.type === 'error' ? 'bg-red-100 border-red-400 text-red-700' : 'bg-green-100 border-green-400 text-green-700'"
+         class="border px-4 py-3 rounded mb-6">
+      {{ statusMessage.text }}
+    </div>
+
+    <!-- Workers Status -->
+    <section class="bg-white rounded-lg shadow p-6 mb-6">
+      <h2 class="text-xl font-semibold mb-4 text-gray-800">Workers Status</h2>
+      <div class="text-center py-4">
+        <div
+          :class="workflowRunning ? 'bg-green-500' : 'bg-gray-400'"
+          class="w-6 h-6 rounded-full mx-auto mb-2"></div>
+        <p class="text-sm font-semibold">{{ workflowRunning ? 'RUNNING' : 'STOPPED' }}</p>
+      </div>
+    </section>
+
+    <!-- Metrics Today -->
+    <section class="bg-white rounded-lg shadow p-6 mb-6">
+      <h2 class="text-xl font-semibold mb-4 text-gray-800">Quotas journaliers</h2>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div v-for="(quota, key) in quotas" :key="key" class="border rounded p-4">
+          <p class="text-sm text-gray-600 mb-2">{{ formatActionType(key) }}</p>
+          <div class="flex items-baseline gap-2 mb-2">
+            <span class="text-2xl font-bold">{{ quota.current }}</span>
+            <span class="text-gray-400">/ {{ quota.limit }}</span>
+          </div>
+          <div class="w-full bg-gray-200 rounded-full h-2">
+            <div
+              :class="quota.exceeded ? 'bg-red-500' : 'bg-blue-500'"
+              :style="{width: Math.min(100, (quota.current / quota.limit * 100)) + '%'}"
+              class="h-2 rounded-full transition-all"></div>
+          </div>
+          <p class="text-xs text-gray-500 mt-1">{{ quota.remaining }} restant(s)</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Global Metrics -->
+    <section class="bg-white rounded-lg shadow p-6 mb-6">
+      <h2 class="text-xl font-semibold mb-4 text-gray-800">Métriques globales</h2>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="text-center border rounded p-4">
+          <p class="text-3xl font-bold text-blue-600">{{ activity.messages_sent_today || 0 }}</p>
+          <p class="text-sm text-gray-600">Messages envoyés</p>
+        </div>
+        <div class="text-center border rounded p-4">
+          <p class="text-3xl font-bold text-purple-600">{{ activity.prospects?.total || 0 }}</p>
+          <p class="text-sm text-gray-600">Prospects total</p>
+        </div>
+        <div class="text-center border rounded p-4">
+          <p class="text-3xl font-bold text-green-600">{{ activity.prospects?.by_status?.connected || 0 }}</p>
+          <p class="text-sm text-gray-600">Connectés</p>
+        </div>
+        <div class="text-center border rounded p-4">
+          <p class="text-3xl font-bold text-orange-600">{{ activity.validations_pending || 0 }}</p>
+          <p class="text-sm text-gray-600">Validations pending</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Validations Pending -->
+    <section class="bg-white rounded-lg shadow p-6 mb-6">
+      <h2 class="text-xl font-semibold mb-4 text-gray-800">
+        Validations requises
+        <span class="bg-orange-500 text-white px-3 py-1 rounded-full text-sm ml-2">
+          {{ validations.length }}
+        </span>
+      </h2>
+
+      <div v-if="validations.length === 0" class="text-gray-500 text-center py-4">
+        Aucune validation en attente
+      </div>
+
+      <div v-for="val in validations" :key="val.log_id"
+           class="border-l-4 border-orange-500 p-4 mb-4 bg-orange-50 rounded">
+        <div class="flex justify-between items-start">
+          <div class="flex-1">
+            <p class="font-semibold text-gray-800">{{ val.action }}</p>
+            <p class="text-sm text-gray-600 mt-1">
+              Prospect: {{ val.context?.prospect?.first_name }} {{ val.context?.prospect?.last_name }}
+            </p>
+            <p class="text-sm text-gray-600 mt-1">{{ formatDate(val.created_at) }}</p>
+            <a v-if="val.context?.prospect?.linkedin_url"
+               :href="val.context.prospect.linkedin_url"
+               target="_blank"
+               class="text-blue-500 text-sm hover:underline">
+              LinkedIn →
+            </a>
+          </div>
+          <div class="flex gap-2">
+            <button @click="approveValidation(val.log_id)"
+                    :disabled="loading"
+                    class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 transition disabled:opacity-50">
+              ✓ Approuver
+            </button>
+            <button @click="rejectValidation(val.log_id)"
+                    :disabled="loading"
+                    class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 transition disabled:opacity-50">
+              ✗ Rejeter
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Recent Logs -->
+    <section class="bg-white rounded-lg shadow p-6">
+      <h2 class="text-xl font-semibold mb-4 text-gray-800">Logs récents</h2>
+      <div class="overflow-auto max-h-96">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-100 sticky top-0">
+            <tr>
+              <th class="p-2 text-left">Action</th>
+              <th class="p-2 text-left">Status</th>
+              <th class="p-2 text-left">Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="recentLogs.length === 0">
+              <td colspan="3" class="p-4 text-center text-gray-500">Aucun log disponible</td>
+            </tr>
+            <tr v-for="log in recentLogs" :key="log.id" class="border-b hover:bg-gray-50">
+              <td class="p-2">{{ log.action }}</td>
+              <td class="p-2">
+                <span
+                  :class="log.status === 'success' ? 'text-green-600' : log.status === 'failed' ? 'text-red-600' : 'text-yellow-600'"
+                  class="font-semibold">
+                  {{ log.status }}
+                </span>
+              </td>
+              <td class="p-2 text-gray-500">{{ formatDate(log.created_at) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
