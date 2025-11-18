@@ -10,8 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from config.config import settings
 from config.logger import logger
-from app.api.routes import auth, users, health, accounts, prospects, connections, messages, followups, logs, workflow, validations, stats
-
+from app.api.routes import auth, users, health, accounts, prospects, connections, messages, followups, logs, workflow, validations, stats, webhooks
 from app.database.db import init_db
 from app.core.utils.scheduler import start_all_workers
 
@@ -48,6 +47,7 @@ app.include_router(logs.router)
 app.include_router(workflow.router)
 app.include_router(validations.router)
 app.include_router(stats.router)
+app.include_router(webhooks.router)
 
 # --- Static files (Dashboard UI) ---
 app.mount("/static", StaticFiles(directory="interface"), name="static")

@@ -10,6 +10,7 @@ from app.core.job.connection import run_connection_worker_loop
 from app.core.job.conversation import run_conversation_worker_loop
 from app.core.job.queue import run_queue_loop
 from app.core.job.reply import run_reply_worker_loop
+from app.core.job.metrics import run_metrics_worker_loop
 
 _workers_running = False
 _worker_tasks = {}
@@ -55,7 +56,7 @@ def get_workers_status() -> dict:
         dict: {worker_name: {"running": bool, "task_done": bool}}
     """
     status = {}
-    worker_names = ["followup", "connection", "conversation", "queue", "reply"]
+    worker_names = ["followup", "connection", "conversation", "queue", "reply", "metrics"]
 
     for name in worker_names:
         task = _worker_tasks.get(name)
@@ -187,6 +188,7 @@ async def start_all_workers(skip_initial_sequence: bool = False):
     _worker_tasks["conversation"] = asyncio.create_task(run_conversation_worker_loop(), name="conversation_worker")
     _worker_tasks["queue"] = asyncio.create_task(run_queue_loop(), name="queue_worker")
     _worker_tasks["reply"] = asyncio.create_task(run_reply_worker_loop(), name="reply_worker")
+    _worker_tasks["metrics"] = asyncio.create_task(run_metrics_worker_loop(), name="metrics_worker")
 
     _workers_running = True
     logger.info("✅ All workers running (next runs according to configured delays)")
@@ -218,6 +220,7 @@ async def start_worker(worker_name: str) -> bool:
         "conversation": run_conversation_worker_loop,
         "queue": run_queue_loop,
         "reply": run_reply_worker_loop,
+        "metrics": run_metrics_worker_loop,
     }
 
     if worker_name not in worker_loops:

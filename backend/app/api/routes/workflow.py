@@ -16,7 +16,7 @@ from app.core.utils.scheduler import (
 
 router = APIRouter(prefix="/workflow", tags=["workflow"])
 
-VALID_WORKERS = ["followup", "connection", "conversation", "queue", "reply"]
+VALID_WORKERS = ["followup", "connection", "conversation", "queue", "reply", "metrics"]
 
 @router.post("/start")
 async def start_workflow(current_user: dict = Depends(get_current_user)):
