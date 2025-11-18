@@ -62,6 +62,16 @@ async def serve_login():
     """Serve login page."""
     return FileResponse("interface/login.html")
 
+@app.get("/debug/env")
+async def debug_env():
+    """DEBUG: Check if LLM API keys are loaded (DO NOT expose key values)"""
+    return {
+        "ANTHROPIC_API_KEY": "SET" if settings.ANTHROPIC_API_KEY else "MISSING",
+        "OPENAI_API_KEY": "SET" if settings.OPENAI_API_KEY else "MISSING",
+        "ANTHROPIC_KEY_LENGTH": len(settings.ANTHROPIC_API_KEY) if settings.ANTHROPIC_API_KEY else 0,
+        "OPENAI_KEY_LENGTH": len(settings.OPENAI_API_KEY) if settings.OPENAI_API_KEY else 0,
+    }
+
 # --- Lancement en mode script ---
 if __name__ == "__main__":
     uvicorn.run ("app.api.main:app", host=settings.host, port=settings.port, reload=settings.debug, factory=False)
