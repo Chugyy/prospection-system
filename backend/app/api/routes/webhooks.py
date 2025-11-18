@@ -1,4 +1,5 @@
 import logging
+import json
 from fastapi import APIRouter, Request, HTTPException
 from app.database.db import get_async_db_connection
 from config.config import settings
@@ -26,7 +27,7 @@ async def unipile_webhook(request: Request):
     try:
         await conn.execute(
             "INSERT INTO webhook_logs (payload) VALUES ($1)",
-            payload
+            json.dumps(payload)
         )
         logger.info(f"Webhook logged for account {account_id}, event: {payload.get('event')}")
     finally:
