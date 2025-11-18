@@ -4,7 +4,7 @@
 # Mounts:
 #   - Type: Volume mount
 #   - Name: logs_data
-#   - Container path: /app/log
+#   - Container path: /app/app/log
 #
 # Environment variables:
 #   - APP_NAME="SaaS Bot Conciergerie - Backend"
@@ -71,10 +71,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r config/requirements.txt
 
 # Créer dossier log avec bonnes permissions
-RUN mkdir -p /app/log && \
-    chown -R appuser:appuser /app/log && \
-    touch /app/app.log && \
-    chown appuser:appuser /app/app.log
+RUN mkdir -p /app/app/log && \
+    chown -R appuser:appuser /app/app/log
 
 # Copier code source
 COPY --chown=appuser:appuser . .
