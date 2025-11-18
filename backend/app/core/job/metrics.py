@@ -33,7 +33,7 @@ async def update_daily_metrics():
         """)
 
         # 3. Appels planifiés (détection via regex PostgreSQL)
-        calls_scheduled = await conn.fetchval("""
+        calls_scheduled = await conn.fetchval(r"""
             SELECT COUNT(*) FROM messages
             WHERE sent_by = 'prospect'
               AND DATE(sent_at) = CURRENT_DATE
