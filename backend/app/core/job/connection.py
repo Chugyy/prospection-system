@@ -146,7 +146,7 @@ async def sync_messages_for_prospect(prospect_id: int, account_id: int) -> dict:
     Returns:
         dict: {"messages_synced": int}
     """
-    from app.core.services.unipile.api.endpoints.messaging import get_chats, get_chat_messages
+    from app.core.services.unipile.api.endpoints.messaging import find_attendee_by_provider_id, get_chat_messages
     from config.config import settings
 
     try:
@@ -157,42 +157,25 @@ async def sync_messages_for_prospect(prospect_id: int, account_id: int) -> dict:
             raise ValueError(f"Prospect {prospect_id} or account {account_id} not found")
 
         linkedin_id = prospect.get('linkedin_identifier')
+        attendee_provider_id = prospect.get('attendee_provider_id')
         unipile_account_id = account.get('unipile_account_id')
 
         logger.info(f"Syncing messages for prospect {prospect_id} ({linkedin_id})")
 
-        # 1. Trouver le chat_id
+        # 1. Trouver le chat_id via attendee_provider_id (OPTIMISÉ)
         chat_id = None
-        chats_cursor = None
 
-        while True:
-            chats_data = get_chats(
-                account_id=unipile_account_id,
-                cursor=chats_cursor,
-                limit=50
-            )
+        if attendee_provider_id:
+            logger.info(f"🔍 Searching chat using attendee_provider_id: {attendee_provider_id}")
+            attendee_data = find_attendee_by_provider_id(attendee_provider_id, account_id=unipile_account_id)
 
-            for chat in chats_data.get('items', []):
-                # MÉTHODE 1: Via attendees array
-                attendees = chat.get('attendees', [])
-                for attendee in attendees:
-                    if attendee.get('provider_id') == linkedin_id or attendee.get('public_identifier') == linkedin_id:
-                        chat_id = chat['id']
-                        break
-
-                # MÉTHODE 2: Via attendee_provider_id (fallback si pas trouvé)
-                if not chat_id:
-                    attendee_id = prospect.get('attendee_provider_id')
-                    if attendee_id and chat.get('attendee_provider_id') == attendee_id:
-                        chat_id = chat['id']
-
-                if chat_id:
-                    break
-
-            if chat_id or not chats_data.get('cursor'):
-                break
-
-            chats_cursor = chats_data.get('cursor')
+            if attendee_data:
+                chat_id = attendee_data.get('chat_id')
+                logger.info(f"✅ Chat found via attendee API: chat_id={chat_id}")
+            else:
+                logger.warning(f"No attendee found for provider_id {attendee_provider_id}")
+        else:
+            logger.warning(f"No attendee_provider_id for prospect {prospect_id}")
 
         if not chat_id:
             logger.warning(f"No chat found for prospect {prospect_id}")
@@ -233,12 +216,16 @@ async def sync_messages_for_prospect(prospect_id: int, account_id: int) -> dict:
                 if existing:
                     continue
 
+                # Process attachments (audio transcription)
+                from app.core.services.media.transcriptor import process_message_attachments
+                content = process_message_attachments(msg, unipile_account_id)
+
                 # Insérer
                 await crud.create_message(
                     prospect_id=prospect_id,
                     account_id=account_id,
                     sent_by='account' if msg.get('from_me') else 'prospect',
-                    content=msg.get('body', {}).get('text', ''),
+                    content=content,
                     message_type='manual',  # Messages sync depuis Unipile = manual (historique)
                     sent_at=msg.get('date'),
                     unipile_message_id=msg_id

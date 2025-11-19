@@ -77,7 +77,18 @@ class StrategicLLM:
         prompt = f"""Tu es un stratège conversationnel expert en prospection LinkedIn.
 
 TON RÔLE :
-Analyser la conversation et décider de la prochaine direction conversationnelle.
+1. DÉCIDER si on doit agir sur cette conversation
+2. Si oui, analyser la conversation et décider de la prochaine direction conversationnelle
+
+DÉCISION D'ACTION (PRIORITÉ ABSOLUE) :
+Avant toute analyse stratégique, détermine l'action à prendre :
+
+- **"reply"** : Dernier message = prospect ET nécessite une réponse (question, intérêt, engagement, pain point mentionné)
+- **"skip"** : Dernier message = nous OU prospect dit "ok merci", "je réfléchis", "on verra" (attend sa réponse)
+- **"archive"** : Prospect a dit "non merci", "pas intéressé", "pas pour le moment" (refus poli)
+- **"close"** : Prospect hostile, irrespectueux, ou demande explicitement de ne plus être contacté
+
+Si action = "skip", "archive" ou "close" → les autres champs stratégiques peuvent être vides/null.
 
 CONTEXTE PROSPECT :
 - Prénom : {profile.get('first_name', 'N/A')}
@@ -85,11 +96,10 @@ CONTEXTE PROSPECT :
 - Entreprise : {profile.get('company', 'N/A')}
 - Headline : {profile.get('headline', 'N/A')}
 
-HISTORIQUE CONVERSATION ({exchange_count} échanges) :
+HISTORIQUE CONVERSATION COMPLET ({exchange_count} échanges) :
 {history_text}
 
-DERNIER MESSAGE PROSPECT :
-"{prospect_message}"
+IMPORTANT : Analyse l'historique complet ci-dessus pour déterminer qui a envoyé le dernier message (Hugo ou Prospect).
 
 PHASES DE PROSPECTION (référence process.txt) :
 1. **ice_breaker** : Créer du lien, casser le froid, observation spécifique
@@ -200,6 +210,8 @@ Analyse le contexte et décide de la stratégie conversationnelle.
 
 OUTPUT (JSON strict) :
 {{
+  "conversation_action": "reply|skip|archive|close",
+  "action_reason": "Raison courte de la décision (1 phrase)",
   "conversation_phase": "ice_breaker|discovery|qualification|pitch",
   "exchange_count": {exchange_count},
   "objective": "Description claire de l'objectif du prochain message",

@@ -5,10 +5,10 @@ import asyncio
 from datetime import datetime, timedelta
 import pytz
 from config.logger import logger
-from app.core.job.followup import run_followup_worker_loop
+from app.core.job.queue import run_queue_worker_loop as run_action_executor_loop
 from app.core.job.connection import run_connection_worker_loop
 from app.core.job.conversation import run_conversation_worker_loop
-from app.core.job.queue import run_queue_loop
+from app.core.job.connection_queue import run_queue_loop as run_connection_queue_loop
 from app.core.job.reply import run_reply_worker_loop
 from app.core.job.metrics import run_metrics_worker_loop
 
@@ -56,7 +56,7 @@ def get_workers_status() -> dict:
         dict: {worker_name: {"running": bool, "task_done": bool}}
     """
     status = {}
-    worker_names = ["followup", "connection", "conversation", "queue", "reply", "metrics"]
+    worker_names = ["action_executor", "connection", "conversation", "connection_queue", "reply", "metrics"]
 
     for name in worker_names:
         task = _worker_tasks.get(name)
@@ -72,7 +72,7 @@ def is_worker_running(worker_name: str) -> bool:
     Vérifie si un worker spécifique est en cours d'exécution.
 
     Args:
-        worker_name: Nom du worker (followup, connection, conversation, queue, reply)
+        worker_name: Nom du worker (action_executor, connection, conversation, connection_queue, reply, metrics)
 
     Returns:
         bool: True si le worker est actif
@@ -153,22 +153,22 @@ async def start_all_workers(skip_initial_sequence: bool = False):
         logger.info("Running initial worker sequence...")
         try:
             from app.core.job.connection import scan_and_queue_connections
-            from app.core.job.queue import process_queue
+            from app.core.job.connection_queue import process_queue
             from app.core.job.reply import process_unread_messages
-            from app.core.job.followup import process_pending_followups
+            from app.core.job.queue import process_pending_actions
             from app.core.job.conversation import detect_stale_conversations
 
             logger.info("1/5 Connection scan...")
             await scan_and_queue_connections()
 
-            logger.info("2/5 Queue processing...")
+            logger.info("2/5 Connection queue processing...")
             await process_queue()
 
             logger.info("3/5 Reply to unread messages...")
             await process_unread_messages()
 
-            logger.info("4/5 Followup execution...")
-            await process_pending_followups()
+            logger.info("4/5 Action executor...")
+            await process_pending_actions()
 
             logger.info("5/5 Conversation staleness...")
             await detect_stale_conversations()
@@ -183,10 +183,10 @@ async def start_all_workers(skip_initial_sequence: bool = False):
     # 2. LANCER LES BOUCLES INFINIES EN PARALLÈLE
     logger.info("🔄 Starting worker loops with configured delays...")
 
-    _worker_tasks["followup"] = asyncio.create_task(run_followup_worker_loop(), name="followup_worker")
+    _worker_tasks["action_executor"] = asyncio.create_task(run_action_executor_loop(), name="action_executor_worker")
     _worker_tasks["connection"] = asyncio.create_task(run_connection_worker_loop(), name="connection_worker")
     _worker_tasks["conversation"] = asyncio.create_task(run_conversation_worker_loop(), name="conversation_worker")
-    _worker_tasks["queue"] = asyncio.create_task(run_queue_loop(), name="queue_worker")
+    _worker_tasks["connection_queue"] = asyncio.create_task(run_connection_queue_loop(), name="connection_queue_worker")
     _worker_tasks["reply"] = asyncio.create_task(run_reply_worker_loop(), name="reply_worker")
     _worker_tasks["metrics"] = asyncio.create_task(run_metrics_worker_loop(), name="metrics_worker")
 
@@ -201,7 +201,7 @@ async def start_worker(worker_name: str) -> bool:
     Démarre un worker spécifique.
 
     Args:
-        worker_name: Nom du worker (followup, connection, conversation, queue, reply)
+        worker_name: Nom du worker (action_executor, connection, conversation, connection_queue, reply, metrics)
 
     Returns:
         bool: True si le worker a été démarré, False si déjà actif
@@ -215,10 +215,10 @@ async def start_worker(worker_name: str) -> bool:
 
     # Mapping worker_name -> fonction de loop
     worker_loops = {
-        "followup": run_followup_worker_loop,
+        "action_executor": run_action_executor_loop,
         "connection": run_connection_worker_loop,
         "conversation": run_conversation_worker_loop,
-        "queue": run_queue_loop,
+        "connection_queue": run_connection_queue_loop,
         "reply": run_reply_worker_loop,
         "metrics": run_metrics_worker_loop,
     }

@@ -58,11 +58,15 @@ WHITELIST_TITLES = [
     r'\bcto\b',
     r'\bcoo\b',
     r'\bcmo\b',
+    r'\bconsultant\b',
+    r'\bexpert\b',
+    r'\bspécialiste\b',
+    r'\bspecialist\b',
 ]
 
 WHITELIST_SECTORS = [
     r'\bagence\b',
-    r'\bagency\b',
+    r'agency',  # Match "agency" même collé à d'autres mots (ex: actiris-agency)
     r'\bmarketing\b',
     r'\bweb\b',
     r'\bdesign\b',
@@ -72,6 +76,18 @@ WHITELIST_SECTORS = [
     r'\bcréatif\b',
     r'\bcreative\b',
     r'\bstudio\b',
+    r'\bseo\b',
+    r'\bsem\b',
+    r'\bcontent\b',
+    r'\bréférencement\b',
+    r'\bmotion\b',
+    r'\banimation\b',
+    r'\bvideo\b',
+    r'\bvidéo\b',
+    r'\bgraphic\b',
+    r'\bgraphique\b',
+    r'\bsaas\b',
+    r'\btech\b',
 ]
 
 

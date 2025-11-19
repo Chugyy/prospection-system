@@ -406,30 +406,16 @@ async def send_first_contact_message(prospect_id: int, account_id: int) -> dict:
     Returns:
         dict: {"success": bool, "message_id": int}
     """
+    from app.core.utils.actions import execute_send_first_contact
+
     try:
-        prospect = await crud.get_prospect(prospect_id)
-        if not prospect:
-            raise ValueError(f"Prospect {prospect_id} not found")
-
-        # Générer message personnalisé via IA
-        logger.info(f"Generating AI welcome message for prospect {prospect_id}")
-        content = await message_composer.generate_welcome_message(prospect)
-
-        if not content:
-            raise ValueError("Failed to generate welcome message via AI")
-
-        # Envoyer message
-        result = await send_message_via_unipile(
+        # Utiliser la fonction centralisée
+        result = await execute_send_first_contact(
             prospect_id=prospect_id,
-            account_id=account_id,
-            content=content,
-            message_type='first_contact'
+            account_id=account_id
         )
 
-        if not result['success']:
-            raise ValueError(f"Failed to send first contact: {result['error']}")
-
-        logger.info(f"AI-generated first contact sent: prospect_id={prospect_id}, message_id={result['message_id']}")
+        logger.info(f"AI-generated first contact sent: prospect_id={prospect_id}, message_id={result.get('message_id')}")
 
         # Créer followups automatiques (Type A)
         from app.core.handler.followup import create_auto_first_followups
@@ -437,7 +423,7 @@ async def send_first_contact_message(prospect_id: int, account_id: int) -> dict:
 
         return {
             "success": True,
-            "message_id": result['message_id']
+            "message_id": result.get('message_id')
         }
 
     except Exception as e:

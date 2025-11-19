@@ -303,6 +303,28 @@ async def update_prospect_linkedin_data(prospect_id: int, data: dict) -> bool:
     return await update_prospect(prospect_id, **data)
 
 
+async def archive_prospect(prospect_id: int) -> bool:
+    """Marque un prospect comme archivé (conversation terminée poliment)."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE prospects SET status = 'archived', updated_at = NOW() WHERE id = $1",
+            prospect_id
+        )
+        return int(result.split()[1]) > 0
+
+
+async def close_prospect(prospect_id: int) -> bool:
+    """Marque un prospect comme fermé (ne plus contacter)."""
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE prospects SET status = 'closed', updated_at = NOW() WHERE id = $1",
+            prospect_id
+        )
+        return int(result.split()[1]) > 0
+
+
 # ============================
 # CONNECTIONS
 # ============================
@@ -618,6 +640,37 @@ async def mark_log_executed(log_id: int) -> bool:
         return int(result.split()[1]) > 0
 
 
+async def get_pending_log_for_prospect(
+    prospect_id: int,
+    action: str,
+    statuses: List[str]
+) -> Optional[Dict]:
+    """
+    Vérifie si un prospect a déjà une action pending.
+
+    Args:
+        prospect_id: ID du prospect
+        action: Type d'action (ex: 'send_reply')
+        statuses: Liste de statuts à vérifier (ex: ['pending'])
+
+    Returns:
+        Dict du log si trouvé, None sinon
+    """
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        placeholders = ', '.join([f"${i+3}" for i in range(len(statuses))])
+        query = f"""
+            SELECT * FROM logs
+            WHERE prospect_id = $1
+              AND action = $2
+              AND status = ANY($3::text[])
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+        result = await conn.fetchrow(query, prospect_id, action, statuses)
+        return dict(result) if result else None
+
+
 async def get_pending_actions(limit: int = 10) -> List[Dict]:
     """
     Récupère les actions pending à exécuter.
@@ -702,12 +755,37 @@ async def should_process_prospect(prospect_id: int) -> tuple[bool, str]:
 
     # STOP si statuts bloquants
     if status in ['rejected', 'archived', 'closed']:
+        from config.logger import logger
+        logger.debug(f"Prospect {prospect_id} skipped: status={status}")
         return (False, f"status_{status}")
 
-    # STOP si avatar ne match pas (vérification avatar cible)
+    # DOUBLE VÉRIFICATION avatar si avatar_match=False
     avatar_match = prospect.get('avatar_match')
     if avatar_match is False:
-        return (False, "avatar_mismatch")
+        from config.logger import logger
+        from app.core.utils.avatar_filter import quick_avatar_check
+
+        # Réexécuter le filtre avatar avec les règles mises à jour
+        headline = prospect.get('headline', '')
+        job_title = prospect.get('job_title', '')
+        company = prospect.get('company', '')
+
+        decision, reason = quick_avatar_check(headline, job_title, company)
+
+        logger.info(f"🔄 Re-checking prospect {prospect_id}: decision={decision}, reason={reason}")
+
+        # Si maintenant accepté, mettre à jour en base
+        if decision == "accept":
+            await update_prospect(prospect_id, avatar_match=True)
+            logger.info(f"✅ Prospect {prospect_id} avatar_match updated to True (was False)")
+            # Continue le traitement
+        elif decision == "llm_needed":
+            logger.info(f"🤖 Prospect {prospect_id} needs LLM analysis - skipping for now")
+            return (False, "avatar_needs_llm_validation")
+        else:
+            # Toujours rejeté
+            logger.info(f"⚠️  Prospect {prospect_id} still avatar_mismatch: headline='{headline}', job='{job_title}', company='{company}'")
+            return (False, "avatar_mismatch")
 
     # STOP si trop de rejets
     rejection_count = prospect.get('rejection_count', 0)

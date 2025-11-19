@@ -16,7 +16,13 @@ async def get_async_db_connection():
 
 async def init_db():
     """Crée la base de données et ses tables si elles n'existent pas."""
-    conn = await get_async_db_connection()
+    try:
+        conn = await get_async_db_connection()
+    except Exception as e:
+        print(f"⚠️  Database connection failed: {e}")
+        print("⚠️  Running in demo mode without database")
+        return
+
     try:
         # Table users
         await conn.execute("""
@@ -127,7 +133,7 @@ async def init_db():
                 account_id INTEGER,
                 sent_by VARCHAR NOT NULL CHECK (sent_by IN ('account', 'prospect', 'llm')),
                 content TEXT NOT NULL,
-                message_type VARCHAR CHECK (message_type IN ('first_contact', 'followup', 'llm_reply', 'manual')),
+                message_type VARCHAR CHECK (message_type IN ('first_contact', 'followup', 'llm_reply', 'manual', 'reply')),
                 sent_at TIMESTAMP DEFAULT NOW(),
                 strategy_context JSONB,
 
@@ -199,6 +205,21 @@ async def init_db():
             ON logs(status, validation_status, created_at)
             WHERE status = 'pending'
         """)
+
+        # Table daily_metrics
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS daily_metrics (
+                id SERIAL PRIMARY KEY,
+                date DATE UNIQUE NOT NULL,
+                messages_sent INT DEFAULT 0,
+                responses_received INT DEFAULT 0,
+                calls_scheduled INT DEFAULT 0,
+                prospects_archived INT DEFAULT 0,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_metrics_date ON daily_metrics(date DESC)")
 
         print("Database initialized successfully")
     finally:

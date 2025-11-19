@@ -9,7 +9,7 @@ env_path = pathlib.Path(__file__).parent / ".env"
 load_dotenv(env_path)
 
 class Settings(BaseSettings):
-    app_name: str = Field("SaaS Bot Conciergerie - Backend", env="APP_NAME")
+    app_name: str = Field("Prospection System - Backend", env="APP_NAME")
     debug: bool = Field(False, env="DEBUG")
     host: str = Field("127.0.0.1", env="HOST")
     port: int = Field(8000, env="PORT")

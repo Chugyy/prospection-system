@@ -7,7 +7,7 @@
 #   - Container path: /app/app/log
 #
 # Environment variables:
-#   - APP_NAME="SaaS Bot Conciergerie - Backend"
+#   - APP_NAME="Prospection System - Backend"
 #   - DEBUG=true
 #   - HOST=0.0.0.0
 #   - PORT=8000

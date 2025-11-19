@@ -16,7 +16,7 @@ async def process_unread_messages() -> dict:
        - Sync messages en DB
        - Récupérer historique conversation
        - Générer réponse via orchestrateur LLM
-       - Créer action 'send_reply' en queue (logs table)
+       - Envoyer réponse immédiatement
     4. Respecter quotas et rate limits
 
     Returns:
@@ -108,12 +108,16 @@ async def process_unread_messages() -> dict:
                         except Exception as e:
                             logger.warning(f"Failed to parse timestamp {timestamp_str}: {e}")
 
+                    # Process attachments (audio transcription)
+                    from app.core.services.media.transcriptor import process_message_attachments
+                    content = process_message_attachments(msg, settings.UNIPILE_ACCOUNT_ID)
+
                     # Insérer message
                     message_id = await crud.create_message(
                         prospect_id=prospect_id,
                         account_id=account_id,
                         sent_by=sent_by,
-                        content=msg.get('text') or '',
+                        content=content,
                         message_type=None,
                         sent_at=sent_at,
                         unipile_message_id=unipile_msg_id
@@ -124,26 +128,20 @@ async def process_unread_messages() -> dict:
 
                     # Garder le dernier message du prospect
                     if sent_by == 'prospect':
-                        last_prospect_message = msg.get('text') or ''
+                        last_prospect_message = content
 
-                if new_messages_count == 0:
-                    logger.debug(f"No new messages for prospect {prospect_id}")
-                    continue
-
-                # 5. Vérifier s'il y a un message du prospect à traiter
-                if not last_prospect_message or last_prospect_message.strip() == '':
-                    logger.debug(f"No prospect message to reply to for prospect {prospect_id}")
-                    continue
-
-                analyzed += 1
-
-                # 6. GARDE: Vérifier si dernier message vient déjà de nous
+                # 5. Récupérer l'historique complet de la conversation
                 messages_history = await crud.list_messages(prospect_id=prospect_id)
-                if messages_history and messages_history[0]['sent_by'] == 'account':
-                    logger.info(f"Last message from account for prospect {prospect_id}, skipping reply")
+
+                if not messages_history:
+                    logger.debug(f"No message history for prospect {prospect_id}")
                     continue
 
-                # Construire historique au format orchestrateur
+                # 6. Utiliser LLM stratégique pour décider de l'action
+                from app.core.services.llm.strategic import StrategicLLM
+                strategic_llm = StrategicLLM()
+
+                # Construire l'historique au format LLM
                 conversation_history = []
                 for msg in reversed(messages_history):  # Plus ancien en premier
                     role = "user" if msg['sent_by'] == 'prospect' else "assistant"
@@ -152,11 +150,65 @@ async def process_unread_messages() -> dict:
                         "content": msg['content']
                     })
 
-                # 7. Générer réponse via orchestrateur LLM
+                # Analyser avec LLM2 pour obtenir la décision d'action
+                # Note: On passe une string vide pour prospect_message car le LLM doit
+                # analyser l'historique complet sans biais pour déterminer qui a écrit le dernier message
+
+                try:
+                    strategy = await strategic_llm.analyze(
+                        prospect_message="",  # Laisser le LLM analyser l'historique complet
+                        history=conversation_history,
+                        profile={
+                            "first_name": prospect.get('first_name', ''),
+                            "last_name": prospect.get('last_name', ''),
+                            "job_title": prospect.get('job_title', ''),
+                            "company": prospect.get('company', ''),
+                            "headline": prospect.get('headline', ''),
+                        }
+                    )
+                except Exception as e:
+                    logger.error(f"Strategic LLM failed for prospect {prospect_id}: {e}")
+                    # Fallback: si dernier message = prospect, on considère qu'il faut répondre
+                    if messages_history[0]['sent_by'] == 'prospect':
+                        strategy = {"conversation_action": "reply", "action_reason": "Fallback: last message from prospect"}
+                    else:
+                        strategy = {"conversation_action": "skip", "action_reason": "Fallback: last message from us"}
+
+                action = strategy.get('conversation_action', 'skip')
+                action_reason = strategy.get('action_reason', 'N/A')
+
+                logger.info(f"🤖 Strategic decision for prospect {prospect_id}: {action} - {action_reason}")
+
+                # 7. Agir selon la décision
+                if action == 'skip':
+                    logger.debug(f"Skipping prospect {prospect_id}: {action_reason}")
+                    continue
+                elif action == 'archive':
+                    logger.info(f"📦 Archiving prospect {prospect_id}: {action_reason}")
+                    await crud.archive_prospect(prospect_id)
+                    continue
+                elif action == 'close':
+                    logger.info(f"🔒 Closing prospect {prospect_id}: {action_reason}")
+                    await crud.close_prospect(prospect_id)
+                    continue
+                elif action != 'reply':
+                    logger.warning(f"Unknown action '{action}' for prospect {prospect_id}, skipping")
+                    continue
+
+                analyzed += 1
+
+                # 8. Générer réponse via orchestrateur LLM
                 logger.info(f"Generating LLM reply for prospect {prospect_id}")
 
+                # Trouver le dernier message du prospect dans l'historique
+                last_prospect_msg = ""
+                for msg in conversation_history:
+                    if msg['role'] == 'user':
+                        last_prospect_msg = msg['content']
+
+                # L'orchestrateur va recalculer la stratégie (on pourrait optimiser en passant strategy)
                 response = await orchestrator.generate_response(
-                    prospect_message=last_prospect_message,
+                    prospect_message=last_prospect_msg,  # Dernier message du prospect trouvé dans l'historique
                     conversation_history=conversation_history,
                     prospect_profile={
                         "first_name": prospect.get('first_name', ''),
@@ -174,29 +226,21 @@ async def process_unread_messages() -> dict:
                     failed += 1
                     continue
 
-                # 8. Créer action 'send_reply' en queue (via logs table)
-                import random
-                from datetime import timedelta, datetime
+                # 9. Envoyer réponse immédiatement
+                from app.core.utils.actions import execute_send_reply
 
-                scheduled_at = datetime.now() + timedelta(minutes=random.randint(2, 10))
-
-                await crud.create_log(
-                    action='send_reply',
+                result = await execute_send_reply(
                     prospect_id=prospect_id,
                     account_id=account_id,
-                    source='llm',
-                    validation_status='auto_execute',
-                    status='pending',
-                    priority=1,
-                    payload={
-                        'scheduled_at': scheduled_at.isoformat(),
-                        'content': response,
-                        'last_prospect_message': last_prospect_message
-                    }
+                    content=response
                 )
 
-                replies_generated += 1
-                logger.info(f"✅ Reply generated for prospect {prospect_id}, scheduled at {scheduled_at}")
+                if result['success']:
+                    replies_generated += 1
+                    logger.info(f"✅ Reply sent immediately to prospect {prospect_id}")
+                else:
+                    failed += 1
+                    logger.error(f"❌ Failed to send reply to prospect {prospect_id}")
 
             except Exception as e:
                 failed += 1

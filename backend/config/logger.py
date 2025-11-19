@@ -13,11 +13,14 @@ formatter = logging.Formatter(LOG_FORMAT)
 file_handler = RotatingFileHandler(LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
 file_handler.setFormatter(formatter)
 
-# Handler pour console/terminal
-console_handler = logging.StreamHandler()
+# Handler pour console/terminal (unbuffered pour Docker)
+import sys
+console_handler = logging.StreamHandler(sys.stdout)
 console_handler.setFormatter(formatter)
+console_handler.setLevel(LOG_LEVEL)
 
 logger = logging.getLogger(settings.app_name)
 logger.setLevel(LOG_LEVEL)
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
+logger.propagate = False

@@ -2,220 +2,173 @@
 # app/core/job/queue.py
 
 import asyncio
+import random
 from config.logger import logger
-from config.config import settings
 from app.database import crud
+from app.core.utils.quota import should_process_today
+from app.core.utils.actions import (
+    execute_send_first_contact,
+    execute_send_followup,
+    execute_send_reply
+)
 
-async def process_queue() -> dict:
+# Délais minimums entre actions (secondes)
+MIN_DELAYS = {
+    'send_first_contact': 120,  # 2 min
+    'send_followup_a_1': 180,   # 3 min
+    'send_followup_a_2': 180,
+    'send_followup_a_3': 180,
+    'send_followup_b': 180,
+    'send_followup_c': 180,
+    'send_reply': 120,          # 2 min
+}
+
+
+async def process_pending_actions():
     """
-    Traite les tâches depuis la queue par priorité.
+    Exécute toutes les actions pending dans logs.
+
+    Fréquence recommandée : toutes les 2-5 minutes
 
     Processus:
-    1. Vérifier quota journalier (early exit)
-    2. Récupérer N tâches pending triées par priorité ASC
-    3. Dispatcher vers handler approprié
-    4. Marquer comme completed/failed
+    1. Récupérer actions pending depuis table logs
+    2. Grouper par type et vérifier quotas (early exit par type)
+    3. Exécuter avec délais aléatoires
+    4. Respecter limites LinkedIn
 
-    Returns:
-        dict: {"processed": int, "failed": int}
+    Actions supportées:
+    - send_first_contact
+    - send_followup_a_1/2/3
+    - send_followup_b
+    - send_followup_c (après validation humaine)
+    - send_reply
     """
-
     try:
-        logger.info("🔄 Processing queue")
+        logger.info("🚀 Starting ACTION EXECUTOR (rate-limited)")
 
-        batch_size = settings.MAX_BATCH_SIZE
-        pending = await crud.get_pending_tasks(limit=batch_size)
+        # 1. Récupérer actions pending
+        pending_actions = await crud.get_pending_actions(limit=10)
+        logger.info(f"📋 Found {len(pending_actions)} pending actions")
 
-        if not pending:
-            logger.info("No pending tasks")
-            return {"processed": 0, "failed": 0}
+        if not pending_actions:
+            return {"executed": 0, "skipped": 0, "failed": 0}
 
-        logger.info(f"📋 Processing {len(pending)} tasks")
+        # 2. Grouper par type d'action
+        actions_by_type = {}
+        for action in pending_actions:
+            action_type = action['action']
+            if action_type not in actions_by_type:
+                actions_by_type[action_type] = []
+            actions_by_type[action_type].append(action)
 
-        processed = 0
-        failed = 0
+        logger.info(f"📊 Actions grouped: {', '.join([f'{k}={len(v)}' for k, v in actions_by_type.items()])}")
 
-        for task in pending:
-            try:
-                task_id = task['id']
-                task_type = task['type']
-                priority = task['priority']
+        executed_count = 0
+        skipped_count = 0
+        failed_count = 0
 
-                logger.info(f"⚙️  Task {task_id} (type: {task_type}, priority: {priority})")
+        # 3. Traiter par type d'action
+        for action_type, actions in actions_by_type.items():
+            # Traiter les actions de ce type
+            for action in actions:
+                # Vérifier quota AVANT chaque action
+                quota_check = await should_process_today(action_type)
 
-                await crud.update_task_status(task_id, 'processing')
-
-                # Dispatcher
-                if task_type == 'process_connection':
-                    result = await handle_connection(task)
-                else:
-                    logger.warning(f"Unknown task type: {task_type}")
-                    await crud.update_task_status(task_id, 'failed', error=f"Unknown type: {task_type}")
-                    failed += 1
+                if not quota_check['can_process']:
+                    logger.warning(
+                        f"⚠️  Daily quota reached for {action_type} "
+                        f"({quota_check['current']}/{quota_check['limit']}) - skipping remaining actions"
+                    )
+                    skipped_count += 1
                     continue
 
-                await crud.update_task_status(task_id, 'completed', result=result)
-                processed += 1
-                logger.info(f"✅ Task {task_id} completed")
+                try:
+                    prospect_id = action['prospect_id']
+                    account_id = action['account_id']
+                    log_id = action['id']
 
-            except Exception as e:
-                failed += 1
-                logger.error(f"Error processing task {task.get('id')}: {e}")
+                    logger.info(f"⚙️  Processing action {action_type} for prospect {prospect_id}")
 
-                # Retry logic
-                retry_count = task.get('retry_count', 0)
-                max_retries = task.get('max_retries', 3)
+                    # Vérifier si prospect peut être traité
+                    should_process, reason = await crud.should_process_prospect(prospect_id)
+                    if not should_process:
+                        logger.info(f"Skipping prospect {prospect_id}: {reason}")
+                        await crud.update_log_validation(log_id, 'cancelled')
+                        skipped_count += 1
+                        continue
 
-                if retry_count < max_retries:
-                    await crud.increment_retry(task['id'])
-                    logger.info(f"Task {task['id']} will retry ({retry_count + 1}/{max_retries})")
-                else:
-                    await crud.update_task_status(task['id'], 'failed', error=str(e))
-                    logger.error(f"Task {task['id']} failed after {max_retries} retries")
+                    # 4. Vérifier si prospect a répondu (annulation dynamique)
+                    last_message = await crud.get_last_prospect_message(prospect_id)
+                    if last_message and last_message['sent_at'] > action['created_at']:
+                        content = last_message.get('content', '').strip().lower()
+                        if len(content) > 50:
+                            logger.info(f"🚫 Prospect {prospect_id} replied, skipping action {action_type}")
+                            await crud.update_log_validation(log_id, 'cancelled')
+                            skipped_count += 1
+                            continue
 
-        logger.info(f"✅ Queue processed: {processed} completed, {failed} failed")
+                    # 5. Exécuter l'action selon le type
+                    if action_type.startswith('send_first_contact'):
+                        result = await execute_send_first_contact(prospect_id, account_id)
+                    elif action_type.startswith('send_followup'):
+                        result = await execute_send_followup(action, prospect_id, account_id)
+                    elif action_type.startswith('send_reply'):
+                        payload = action.get('payload', {})
+                        content = payload.get('content')
+                        result = await execute_send_reply(prospect_id, account_id, content)
+                    else:
+                        logger.warning(f"Unknown action type: {action_type}")
+                        skipped_count += 1
+                        continue
 
-        return {"processed": processed, "failed": failed}
+                    # 6. Marquer action comme exécutée
+                    await crud.mark_log_executed(log_id)
+                    await crud.update_log_validation(log_id, 'auto_executed')
+
+                    executed_count += 1
+                    logger.info(f"✅ Action {action_type} executed successfully")
+
+                    # 7. Délai aléatoire avant prochaine action
+                    delay = random.randint(
+                        MIN_DELAYS.get(action_type, 120),
+                        MIN_DELAYS.get(action_type, 120) * 2
+                    )
+                    logger.info(f"⏱️  Waiting {delay}s before next action")
+                    await asyncio.sleep(delay)
+
+                except Exception as e:
+                    failed_count += 1
+                    logger.error(f"❌ Error executing action {action.get('id')}: {e}")
+
+        logger.info(f"✅ Action executor completed: {executed_count} executed, {skipped_count} skipped, {failed_count} failed")
+
+        return {
+            "executed": executed_count,
+            "skipped": skipped_count,
+            "failed": failed_count
+        }
 
     except Exception as e:
-        logger.error(f"Fatal error processing queue: {e}")
+        logger.error(f"Fatal error in action executor: {e}")
         raise
 
 
-async def handle_connection(task: dict) -> dict:
+async def run_queue_worker_loop():
     """
-    Handler pour tâche 'process_connection'.
+    Boucle infinie du worker d'exécution d'actions.
 
-    Process connection and create prospect with enriched data from Unipile.
-    """
-    from app.core.job.connection import sync_messages_for_prospect, analyze_and_plan_actions
-    from app.core.services.unipile.api.endpoints.users import get_user_profile
-
-    payload = task['payload']
-    account_id = task['account_id']
-    linkedin_id = payload['linkedin_identifier']
-
-    # Extract attendee_provider_id with fallback to raw.member_id
-    attendee_provider_id = payload.get('attendee_provider_id')
-    if not attendee_provider_id:
-        attendee_provider_id = payload.get('raw', {}).get('member_id')
-
-    logger.info(f"Processing connection: {linkedin_id} (attendee_id: {attendee_provider_id})")
-
-    # Enrichir données via Unipile get_user_profile
-    enriched_data = {}
-    try:
-        unipile_account = await crud.get_account(account_id)
-        unipile_account_id = unipile_account.get('unipile_account_id') if unipile_account else None
-
-        profile = get_user_profile(linkedin_id, account_id=unipile_account_id)
-
-        # Extraction des données enrichies
-        if profile:
-            enriched_data['company'] = profile.get('company', '')
-            enriched_data['job_title'] = profile.get('headline', '')  # Unipile utilise 'headline' pour job title
-            enriched_data['profile_picture_url'] = profile.get('profile_picture_url', '')
-
-            logger.info(f"✅ Enriched profile data for {linkedin_id}: company={enriched_data.get('company')}, job={enriched_data.get('job_title')}")
-    except Exception as e:
-        logger.warning(f"Failed to enrich profile for {linkedin_id}: {e} - continuing with basic data")
-
-    # 1. VÉRIFICATION AVATAR CIBLE (3 niveaux: blacklist, whitelist, LLM)
-    from app.core.utils.avatar_filter import quick_avatar_check
-    from app.core.handler.connection import check_avatar_match
-
-    headline = payload.get('headline', '')
-    job_title = enriched_data.get('job_title', '')
-    company = enriched_data.get('company', '')
-
-    # Niveau 1 & 2: Pattern matching rapide
-    decision, reason = quick_avatar_check(headline, job_title, company)
-
-    if decision == "reject":
-        logger.info(f"❌ Connection rejected (avatar filter): {linkedin_id} - {reason}")
-        return {
-            "prospect_id": None,
-            "messages_synced": 0,
-            "actions_planned": 0,
-            "error": "avatar_mismatch",
-            "reason": reason
-        }
-
-    # 2. Créer prospect (temporaire si LLM needed)
-    prospect_id = await crud.create_prospect(
-        account_id=account_id,
-        first_name=payload.get('first_name', ''),
-        last_name=payload.get('last_name', ''),
-        linkedin_identifier=linkedin_id,
-        attendee_provider_id=attendee_provider_id,
-        linkedin_url=f"https://www.linkedin.com/in/{linkedin_id}",
-        headline=headline,
-        company=company,
-        job_title=job_title,
-        status='pending' if decision == "llm_needed" else 'connected',
-        avatar_match=True if decision == "accept" else None
-    )
-
-    # Niveau 3: LLM pour cas ambigus
-    if decision == "llm_needed":
-        logger.info(f"🤖 Avatar check (LLM needed): prospect {prospect_id} - {reason}")
-        is_match = await check_avatar_match(prospect_id)
-
-        if not is_match:
-            await crud.update_prospect(prospect_id, status='rejected', avatar_match=False)
-            logger.info(f"❌ Connection rejected (LLM): prospect {prospect_id}")
-            return {
-                "prospect_id": prospect_id,
-                "messages_synced": 0,
-                "actions_planned": 0,
-                "error": "avatar_mismatch_llm"
-            }
-
-        # LLM approved → update status
-        await crud.update_prospect(prospect_id, status='connected', avatar_match=True)
-        logger.info(f"✅ Avatar match confirmed (LLM): prospect {prospect_id}")
-
-    # 2. Sync messages
-    sync_result = await sync_messages_for_prospect(prospect_id, account_id)
-
-    # STOP si erreur de sync
-    if sync_result.get('error'):
-        logger.warning(f"Sync failed for prospect {prospect_id}: {sync_result['error']}, skipping analysis")
-        return {
-            "prospect_id": prospect_id,
-            "messages_synced": 0,
-            "actions_planned": 0,
-            "error": sync_result['error']
-        }
-
-    # 3. Analyser + planifier actions
-    plan_result = await analyze_and_plan_actions(prospect_id, account_id)
-
-    logger.info(f"✅ Connection processed: prospect={prospect_id}, messages={sync_result.get('messages_synced')}, actions={plan_result.get('actions_planned')}")
-
-    return {
-        "prospect_id": prospect_id,
-        "messages_synced": sync_result.get('messages_synced', 0),
-        "actions_planned": plan_result.get('actions_planned', 0)
-    }
-
-
-async def run_queue_loop():
-    """
-    Worker générique de traitement de queue.
-
-    Traite toutes tâches par priorité.
-    Fréquence: QUEUE_INTERVAL (30 min par défaut).
+    Lance process_pending_actions toutes les 5 minutes (300s).
     Pause nocturne: 22h-6h (heure de Paris).
     """
     from app.core.utils.scheduler import smart_sleep
 
-    logger.info("Starting queue processor")
+    logger.info("Starting ACTION EXECUTOR loop")
 
     while True:
         try:
-            await process_queue()
+            await process_pending_actions()
         except Exception as e:
-            logger.error(f"Error in queue processor: {e}")
+            logger.error(f"Error in action executor loop: {e}")
 
-        await smart_sleep(settings.QUEUE_INTERVAL)
+        # Attendre 5 minutes (avec pause nocturne)
+        await smart_sleep(300)
