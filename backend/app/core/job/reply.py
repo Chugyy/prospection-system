@@ -22,7 +22,7 @@ async def process_unread_messages() -> dict:
     Returns:
         dict: {"analyzed": int, "replies_generated": int, "failed": int}
     """
-    from app.core.services.unipile.api.endpoints.messaging import get_chats, get_chat_messages
+    from app.core.services.unipile.api.endpoints.messaging import get_chats, get_chat_messages, mark_chat_as_read
     from app.core.services.llm.orchestrator import orchestrator
     from config.config import settings
 
@@ -68,15 +68,47 @@ async def process_unread_messages() -> dict:
                     logger.info(f"Skipping prospect {prospect_id}: {reason}")
                     continue
 
-                # 3. Récupérer TOUS les messages du chat
-                messages_data = get_chat_messages(
-                    chat_id=chat_id,
-                    account_id=settings.UNIPILE_ACCOUNT_ID,
-                    limit=100
-                )
+                # 3. Récupérer TOUS les messages du chat jusqu'à cutoff
+                from datetime import datetime, timedelta
+                cutoff_date = datetime.now() - timedelta(days=settings.CUTOFF_DAYS)
 
-                messages = messages_data.get('items', [])
-                logger.info(f"Retrieved {len(messages)} messages from chat {chat_id}")
+                all_messages = []
+                cursor = None
+
+                while True:
+                    messages_data = get_chat_messages(
+                        chat_id=chat_id,
+                        account_id=settings.UNIPILE_ACCOUNT_ID,
+                        cursor=cursor,
+                        limit=100
+                    )
+
+                    page_messages = messages_data.get('items', [])
+                    if not page_messages:
+                        break
+
+                    all_messages.extend(page_messages)
+
+                    # Check if we reached cutoff
+                    oldest_msg = page_messages[-1]
+                    timestamp_str = oldest_msg.get('timestamp')
+                    if timestamp_str:
+                        try:
+                            msg_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                            if msg_time.tzinfo is not None:
+                                msg_time = msg_time.replace(tzinfo=None)
+                            if msg_time < cutoff_date:
+                                break
+                        except Exception:
+                            pass
+
+                    new_cursor = messages_data.get('cursor')
+                    if not new_cursor or new_cursor == cursor:
+                        break
+                    cursor = new_cursor
+
+                messages = all_messages
+                logger.info(f"Retrieved {len(messages)} messages from chat {chat_id} (up to {settings.CUTOFF_DAYS} days)")
 
                 # 4. Sync nouveaux messages en DB
                 new_messages_count = 0
@@ -238,6 +270,13 @@ async def process_unread_messages() -> dict:
                 if result['success']:
                     replies_generated += 1
                     logger.info(f"✅ Reply sent immediately to prospect {prospect_id}")
+
+                    # Mark chat as read
+                    try:
+                        mark_chat_as_read(chat_id, settings.UNIPILE_ACCOUNT_ID)
+                        logger.debug(f"Chat {chat_id} marked as read")
+                    except Exception as e:
+                        logger.warning(f"Failed to mark chat {chat_id} as read: {e}")
                 else:
                     failed += 1
                     logger.error(f"❌ Failed to send reply to prospect {prospect_id}")

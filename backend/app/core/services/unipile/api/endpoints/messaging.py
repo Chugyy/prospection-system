@@ -395,46 +395,59 @@ def get_message_attachment(message_id, attachment_id, account_id=None):
 
 def send_linkedin_message(identifier_or_url, text, account_id=None):
     """Send LinkedIn message to user with improved strategy.
-    
+
     Uses provider_id-first approach as recommended by Unipile.
-    
+
     Args:
         identifier_or_url: LinkedIn identifier or full profile URL
         text: Message text
         account_id: Unipile account ID (optional)
-        
+
     Returns:
         dict: {"chat_id": str, "chat_was_created": bool, "message_result": dict}
     """
     try:
         result = get_or_create_chat(identifier_or_url, text, account_id)
         chat_id = result.get("id")
-        
+
         if not chat_id:
             raise ValueError("Cannot obtain chat_id")
-        
+
         return {
             "chat_id": chat_id,
             "chat_was_created": result.get("created", False),
             "message_result": {"status": "sent_with_chat_creation"}
         }
-        
+
     except Exception as e:
         if "attendee" in str(e).lower() or "not found" in str(e).lower():
             try:
                 sync_account(account_id)
-                
+
                 result = get_or_create_chat(identifier_or_url, text, account_id)
                 chat_id = result.get("id")
-                
+
                 if chat_id:
                     return {
                         "chat_id": chat_id,
                         "chat_was_created": result.get("created", False),
                         "message_result": {"status": "sent_with_chat_creation_after_sync"}
                     }
-                    
+
             except Exception:
                 pass
-        
+
         raise ValueError(f"Failed to send message: {e}")
+
+def mark_chat_as_read(chat_id, account_id=None):
+    """Mark chat as read using PATCH /chats/{chat_id}.
+
+    Args:
+        chat_id: Chat ID to mark as read
+        account_id: Unipile account ID (optional)
+
+    Returns:
+        dict: API response {"object": "ChatPatched"}
+    """
+    payload = {"action": "setReadStatus", "value": True}
+    return make_request(f"/api/v1/chats/{chat_id}", "PATCH", data=payload)
