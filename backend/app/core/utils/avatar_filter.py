@@ -62,6 +62,20 @@ WHITELIST_TITLES = [
     r'\bexpert\b',
     r'\bspécialiste\b',
     r'\bspecialist\b',
+    r'\bmedia buyer\b',
+    r'\bcopywriter\b',
+    r'\brédacteur\b',
+    r'\bredacteur\b',
+    r'\btraffic manager\b',
+    r'\bgrowth hacker\b',
+    r'\bgrowth\b',
+    r'\bproduct manager\b',
+    r'\bchef de projet\b',
+    r'\bproject manager\b',
+    r'\bsocial media manager\b',
+    r'\bstratège\b',
+    r'\bstratégiste\b',
+    r'\bstrategist\b',
 ]
 
 WHITELIST_SECTORS = [
@@ -165,3 +179,88 @@ def quick_avatar_check(headline: str = '', job_title: str = '', company: str = '
     # ============================
 
     return ("llm_needed", "no_clear_pattern")
+
+
+async def analyze_prospect_with_llm(headline: str, job_title: str, company: str) -> Tuple[str, str]:
+    """
+    Analyse approfondie d'un prospect avec LLM pour les cas ambigus.
+
+    Utilisé quand quick_avatar_check() retourne "llm_needed".
+
+    Args:
+        headline: Headline LinkedIn
+        job_title: Job title
+        company: Entreprise
+
+    Returns:
+        Tuple[decision, reason]:
+        - decision: "accept" ou "reject"
+        - reason: explication courte
+    """
+    from app.core.services.llm.llm import llm_service
+    import json
+    from config.logger import logger
+
+    system_prompt = """Tu es un expert en qualification de prospects B2B pour Hugo, développeur spécialisé en automatisations et agents IA.
+
+PROFIL CLIENT IDÉAL:
+- CEO, Founder, Directeur, Consultant, Expert, Media Buyer, Copywriter, Traffic Manager, Growth Hacker, Product Manager, Chef de projet
+- Secteurs: agences (marketing, web, design), SaaS, tech, digital, communication, media
+- Besoin potentiel: automatisations, workflows, onboarding client, agents IA
+
+PROFILS À REJETER:
+- Immobilier, comptabilité, fiscalité, notaire, BTP, construction
+- Spécialistes IA/automation (concurrents directs)
+- En recherche d'emploi ("à l'écoute d'opportunités", "open to work")
+- Secteurs sans besoin d'automatisation évident
+
+Ta mission: analyser le profil et décider si c'est un bon prospect."""
+
+    user_prompt = f"""Analyse ce profil LinkedIn:
+
+Headline: {headline or 'N/A'}
+Job Title: {job_title or 'N/A'}
+Company: {company or 'N/A'}
+
+Réponds UNIQUEMENT par un JSON avec ce format exact:
+{{
+  "decision": "accept" ou "reject",
+  "reason": "explication courte (max 15 mots)"
+}}
+
+Exemples:
+- CEO d'une agence marketing → {{"decision": "accept", "reason": "CEO agence marketing, profil idéal"}}
+- Développeur IA chez Google → {{"decision": "reject", "reason": "concurrent IA, pas client potentiel"}}
+- Consultant RH freelance → {{"decision": "accept", "reason": "consultant indépendant, peut automatiser"}}
+- Agent immobilier → {{"decision": "reject", "reason": "secteur blacklisté immobilier"}}"""
+
+    try:
+        response = await llm_service.generate_text(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2
+        )
+
+        if not response:
+            logger.warning("LLM returned empty response for prospect analysis")
+            return ("reject", "llm_error_empty_response")
+
+        result = json.loads(response)
+        decision = result.get("decision", "reject")
+        reason = result.get("reason", "llm_decision")
+
+        # Validation
+        if decision not in ["accept", "reject"]:
+            logger.warning(f"Invalid LLM decision: {decision}")
+            return ("reject", "llm_error_invalid_decision")
+
+        logger.info(f"🤖 LLM avatar analysis: decision={decision}, reason={reason}")
+        return (decision, f"llm_{reason}")
+
+    except Exception as e:
+        logger.error(f"LLM avatar analysis failed: {e}")
+        # En cas d'erreur LLM, on rejette par sécurité
+        return ("reject", f"llm_error_{str(e)[:30]}")

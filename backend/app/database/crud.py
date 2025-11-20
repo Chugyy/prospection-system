@@ -788,10 +788,24 @@ async def should_process_prospect(prospect_id: int) -> tuple[bool, str]:
             logger.info(f"✅ Prospect {prospect_id} avatar_match updated to True (was False)")
             # Continue le traitement
         elif decision == "llm_needed":
-            logger.info(f"🤖 Prospect {prospect_id} needs LLM analysis - skipping for now")
-            return (False, "avatar_needs_llm_validation")
+            # Appeler le LLM pour analyse approfondie
+            from app.core.utils.avatar_filter import analyze_prospect_with_llm
+
+            logger.info(f"🤖 Prospect {prospect_id} needs LLM analysis - calling LLM...")
+            llm_decision, llm_reason = await analyze_prospect_with_llm(headline, job_title, company)
+
+            if llm_decision == "accept":
+                # LLM a accepté le prospect
+                await update_prospect(prospect_id, avatar_match=True)
+                logger.info(f"✅ Prospect {prospect_id} ACCEPTED by LLM: {llm_reason}")
+                # Continue le traitement
+            else:
+                # LLM a rejeté le prospect
+                await update_prospect(prospect_id, avatar_match=False, status='rejected')
+                logger.info(f"❌ Prospect {prospect_id} REJECTED by LLM: {llm_reason}")
+                return (False, f"avatar_rejected_{llm_reason}")
         else:
-            # Toujours rejeté
+            # Toujours rejeté par le filtre rapide
             logger.info(f"⚠️  Prospect {prospect_id} still avatar_mismatch: headline='{headline}', job='{job_title}', company='{company}'")
             return (False, "avatar_mismatch")
 
