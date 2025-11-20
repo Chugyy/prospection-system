@@ -5,10 +5,10 @@ import asyncio
 from datetime import datetime, timedelta
 import pytz
 from config.logger import logger
-from app.core.job.queue import run_queue_worker_loop as run_action_executor_loop
+from app.core.job.actions import run_queue_worker_loop as run_action_executor_loop
 from app.core.job.connection import run_connection_worker_loop
 from app.core.job.conversation import run_conversation_worker_loop
-from app.core.job.connection_queue import run_queue_loop as run_connection_queue_loop
+from app.core.job.tasks import run_queue_loop as run_connection_queue_loop
 from app.core.job.reply import run_reply_worker_loop
 from app.core.job.metrics import run_metrics_worker_loop
 
@@ -153,9 +153,9 @@ async def start_all_workers(skip_initial_sequence: bool = False):
         logger.info("Running initial worker sequence...")
         try:
             from app.core.job.connection import scan_and_queue_connections
-            from app.core.job.connection_queue import process_queue
+            from app.core.job.tasks import process_queue
             from app.core.job.reply import process_unread_messages
-            from app.core.job.queue import process_pending_actions
+            from app.core.job.actions import process_pending_actions
             from app.core.job.conversation import detect_stale_conversations
 
             logger.info("1/5 Connection scan...")
