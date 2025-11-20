@@ -406,7 +406,7 @@ async def send_first_contact_message(prospect_id: int, account_id: int) -> dict:
     Returns:
         dict: {"success": bool, "message_id": int}
     """
-    from app.core.utils.actions import execute_send_first_contact
+    from app.core.handler.sender import execute_send_first_contact
 
     try:
         # Utiliser la fonction centralisée

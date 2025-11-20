@@ -34,9 +34,9 @@ async def send_connection_request(prospect_id: int, account_id: int) -> dict:
         if not linkedin_url:
             raise ValueError(f"No linkedin_url for prospect {prospect_id}")
 
-        from app.core.services.unipile.api.endpoints.users import send_connection_request as unipile_send_connection
+        from app.core.services.unipile.api.endpoints.users import send_connection_request
         linkedin_identifier = prospect.get('linkedin_identifier') or linkedin_url
-        unipile_send_connection(linkedin_identifier, account_id=unipile_account_id)
+        send_connection_request(linkedin_identifier, account_id=unipile_account_id)
 
         logger.info(f"Connection request sent: prospect_id={prospect_id}, account_id={account_id}")
 
@@ -170,7 +170,7 @@ async def check_avatar_match(prospect_id: int) -> bool:
         headline = prospect.get('headline', '')
 
         # NIVEAU 1 & 2: Pattern matching rapide
-        from app.core.utils.avatar_filter import quick_avatar_check
+        from app.core.services.avatar.filter import quick_avatar_check
 
         decision, reason = quick_avatar_check(headline, job_title, company)
 

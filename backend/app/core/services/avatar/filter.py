@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# app/core/utils/avatar_filter.py
+# app/core/services/avatar/filter.py
 
 import re
 from typing import Tuple, Optional

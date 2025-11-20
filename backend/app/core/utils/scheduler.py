@@ -5,10 +5,10 @@ import asyncio
 from datetime import datetime, timedelta
 import pytz
 from config.logger import logger
-from app.core.job.actions import run_queue_worker_loop as run_action_executor_loop
+from app.core.job.actions import run_queue_worker_loop
 from app.core.job.connection import run_connection_worker_loop
 from app.core.job.conversation import run_conversation_worker_loop
-from app.core.job.tasks import run_queue_loop as run_connection_queue_loop
+from app.core.job.tasks import run_queue_loop
 from app.core.job.reply import run_reply_worker_loop
 from app.core.job.metrics import run_metrics_worker_loop
 
@@ -183,10 +183,10 @@ async def start_all_workers(skip_initial_sequence: bool = False):
     # 2. LANCER LES BOUCLES INFINIES EN PARALLÈLE
     logger.info("🔄 Starting worker loops with configured delays...")
 
-    _worker_tasks["action_executor"] = asyncio.create_task(run_action_executor_loop(), name="action_executor_worker")
+    _worker_tasks["action_executor"] = asyncio.create_task(run_queue_worker_loop(), name="action_executor_worker")
     _worker_tasks["connection"] = asyncio.create_task(run_connection_worker_loop(), name="connection_worker")
     _worker_tasks["conversation"] = asyncio.create_task(run_conversation_worker_loop(), name="conversation_worker")
-    _worker_tasks["connection_queue"] = asyncio.create_task(run_connection_queue_loop(), name="connection_queue_worker")
+    _worker_tasks["connection_queue"] = asyncio.create_task(run_queue_loop(), name="connection_queue_worker")
     _worker_tasks["reply"] = asyncio.create_task(run_reply_worker_loop(), name="reply_worker")
     _worker_tasks["metrics"] = asyncio.create_task(run_metrics_worker_loop(), name="metrics_worker")
 
@@ -215,10 +215,10 @@ async def start_worker(worker_name: str) -> bool:
 
     # Mapping worker_name -> fonction de loop
     worker_loops = {
-        "action_executor": run_action_executor_loop,
+        "action_executor": run_queue_worker_loop,
         "connection": run_connection_worker_loop,
         "conversation": run_conversation_worker_loop,
-        "connection_queue": run_connection_queue_loop,
+        "connection_queue": run_queue_loop,
         "reply": run_reply_worker_loop,
         "metrics": run_metrics_worker_loop,
     }

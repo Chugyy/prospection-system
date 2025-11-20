@@ -6,7 +6,7 @@ import random
 from config.logger import logger
 from app.database import crud
 from app.core.utils.quota import should_process_today
-from app.core.utils.actions import (
+from app.core.handler.sender import (
     execute_send_first_contact,
     execute_send_followup,
     execute_send_reply

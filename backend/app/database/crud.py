@@ -771,7 +771,7 @@ async def should_process_prospect(prospect_id: int) -> tuple[bool, str]:
     avatar_match = prospect.get('avatar_match')
     if avatar_match is False:
         from config.logger import logger
-        from app.core.utils.avatar_filter import quick_avatar_check
+        from app.core.services.avatar.filter import quick_avatar_check
 
         # Réexécuter le filtre avatar avec les règles mises à jour
         headline = prospect.get('headline', '')
@@ -789,7 +789,7 @@ async def should_process_prospect(prospect_id: int) -> tuple[bool, str]:
             # Continue le traitement
         elif decision == "llm_needed":
             # Appeler le LLM pour analyse approfondie
-            from app.core.utils.avatar_filter import analyze_prospect_with_llm
+            from app.core.services.avatar.filter import analyze_prospect_with_llm
 
             logger.info(f"🤖 Prospect {prospect_id} needs LLM analysis - calling LLM...")
             llm_decision, llm_reason = await analyze_prospect_with_llm(headline, job_title, company)

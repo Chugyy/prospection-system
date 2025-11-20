@@ -1,17 +1,15 @@
-# auth.py
+#!/usr/bin/env python3
+# app/core/utils/jwt.py
 
 from datetime import datetime, timedelta
-from typing import Optional, Union, Dict, Any
+from typing import Optional, Union, Dict
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import requests
-from requests_oauthlib import OAuth2Session
 
 from config.config import settings
-from app.database.crud import get_user_by_username, get_user_by_username, get_user_by_email
-from app.database.models import User
+from app.database.crud import get_user_by_email
 
 # Configuration du hachage de mot de passe
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -34,7 +32,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(hours=settings.jwt_expiration_hours)
-    
+
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
     return encoded_jwt
@@ -49,18 +47,6 @@ def verify_token(token: str) -> Optional[str]:
         return username
     except JWTError:
         return None
-
-async def authenticate_user(email: str, password: str) -> Union[Dict, bool]:
-    """Authentifie un utilisateur par email."""
-    user = await get_user_by_email(email)
-
-    if not user:
-        return False
-
-    if not verify_password(password, user['password_hash']):
-        return False
-
-    return user
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict:
     """Récupère l'utilisateur actuel depuis le token JWT."""

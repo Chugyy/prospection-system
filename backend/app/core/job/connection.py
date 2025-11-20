@@ -6,7 +6,7 @@ from datetime import datetime
 from config.logger import logger
 from app.database import crud
 from app.core.handler.connection import accept_connection_request
-from app.core.utils.avatar_filter import quick_avatar_check
+from app.core.services.avatar.filter import quick_avatar_check
 
 async def scan_and_queue_connections():
     """

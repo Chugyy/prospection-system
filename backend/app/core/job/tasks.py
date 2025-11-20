@@ -121,7 +121,7 @@ async def handle_connection(task: dict) -> dict:
         logger.warning(f"Failed to enrich profile for {linkedin_id}: {e} - continuing with basic data")
 
     # 1. VÉRIFICATION AVATAR CIBLE (3 niveaux: blacklist, whitelist, LLM)
-    from app.core.utils.avatar_filter import quick_avatar_check
+    from app.core.services.avatar.filter import quick_avatar_check
     from app.core.handler.connection import check_avatar_match
 
     headline = payload.get('headline', '')

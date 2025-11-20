@@ -11,7 +11,7 @@ try:
     from anthropic import Anthropic, APIStatusError
 except ImportError:
     Anthropic = None
-    APIStatusError = Exception
+    APIStatusError = None
 
 try:
     from openai import OpenAI

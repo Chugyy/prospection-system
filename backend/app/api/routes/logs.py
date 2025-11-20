@@ -6,7 +6,7 @@ from typing import Optional
 from config.logger import logger
 from app.database import crud
 from app.api.models import LogApprove
-from app.core.utils.log import execute_approved_log
+from app.core.handler.sender import execute_approved_log
 
 router = APIRouter(prefix="/logs", tags=["logs"])
 

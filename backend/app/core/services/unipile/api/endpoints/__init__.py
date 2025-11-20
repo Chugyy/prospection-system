@@ -12,6 +12,3 @@ from .connections import (
 from .utils import (
     sync_account, normalize_identifier
 )
-
-# Backward compatibility
-create_webhook_v2 = create_webhook

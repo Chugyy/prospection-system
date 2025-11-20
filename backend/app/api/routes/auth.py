@@ -6,8 +6,8 @@ from fastapi.responses import RedirectResponse
 
 from app.database import crud
 from app.database.models import User
-from app.core.utils.auth import (
-    hash_password, authenticate_user, create_access_token, get_current_user
+from app.core.utils.jwt import (
+    hash_password, create_access_token, get_current_user
 )
 from app.api.models import UserLogin, Token, UserCreate
 from config.logger import logger
