@@ -247,6 +247,9 @@ async def process_unread_messages() -> dict:
         stats = {"processed": 0, "replied": 0, "skipped": 0, "failed": 0}
 
         for chat in unread_chats:
+            should_mark_read = False
+            chat_id = None
+
             try:
                 attendee_id = chat.get('attendee_provider_id')
                 chat_id = chat.get('id')
@@ -286,13 +289,13 @@ async def process_unread_messages() -> dict:
                     continue
 
                 logger.info(f"Retrieved {len(messages)} messages from chat {chat_id}")
+                should_mark_read = True  # Chat analysé, on mark as read en fin de cycle
 
                 # Guard 1 : Dernier message = nous ?
                 last_message = messages[-1]
                 if last_message.get('is_sender') == 1:
                     logger.debug(f"Skipping prospect {prospect_id}: last message is from us")
                     stats['skipped'] += 1
-                    mark_chat_as_read(chat_id, settings.UNIPILE_ACCOUNT_ID)
                     continue
 
                 # Guard 2 : Throttling (pas plus d'1 message toutes les 15 min)
@@ -423,18 +426,21 @@ async def process_unread_messages() -> dict:
                     unipile_msg_id=result.get('object', {}).get('id')
                 )
 
-                # 11. Marquer comme lu
-                try:
-                    mark_chat_as_read(chat_id, settings.UNIPILE_ACCOUNT_ID)
-                except Exception as e:
-                    logger.warning(f"Failed to mark chat {chat_id} as read: {e}")
-
                 stats['replied'] += 1
                 logger.info(f"✅ Reply sent successfully to prospect {prospect_id}")
 
             except Exception as e:
                 stats['failed'] += 1
                 logger.error(f"Error processing chat {chat.get('id')}: {e}", exc_info=True)
+
+            finally:
+                # Marquer comme lu si le chat a été analysé
+                if should_mark_read and chat_id:
+                    try:
+                        mark_chat_as_read(chat_id, settings.UNIPILE_ACCOUNT_ID)
+                        logger.debug(f"Chat {chat_id} marked as read")
+                    except Exception as e:
+                        logger.warning(f"Failed to mark chat {chat_id} as read: {e}")
 
         logger.info(
             f"✅ Reply worker completed: "
