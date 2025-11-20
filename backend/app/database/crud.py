@@ -693,7 +693,15 @@ async def get_pending_actions(limit: int = 10) -> List[Dict]:
             LIMIT $1""",
             limit
         )
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            r = dict(row)
+            if r.get('payload'):
+                r['payload'] = json.loads(r['payload'])
+            if r.get('details'):
+                r['details'] = json.loads(r['details'])
+            result.append(r)
+        return result
 
 
 async def count_today_actions_by_type() -> Dict[str, int]:

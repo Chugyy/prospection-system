@@ -169,6 +169,12 @@ async def process_unread_messages() -> dict:
                     logger.debug(f"No message history for prospect {prospect_id}")
                     continue
 
+                # 🛡️ GUARD: Ne jamais répondre si notre dernier message est le plus récent
+                last_message = messages_history[-1]
+                if last_message['sent_by'] == 'account':
+                    logger.debug(f"Skipping prospect {prospect_id}: last message is from us")
+                    continue
+
                 # 6. Utiliser LLM stratégique pour décider de l'action
                 from app.core.services.llm.strategic import StrategicLLM
                 strategic_llm = StrategicLLM()
@@ -200,11 +206,8 @@ async def process_unread_messages() -> dict:
                     )
                 except Exception as e:
                     logger.error(f"Strategic LLM failed for prospect {prospect_id}: {e}")
-                    # Fallback: si dernier message = prospect, on considère qu'il faut répondre
-                    if messages_history[0]['sent_by'] == 'prospect':
-                        strategy = {"conversation_action": "reply", "action_reason": "Fallback: last message from prospect"}
-                    else:
-                        strategy = {"conversation_action": "skip", "action_reason": "Fallback: last message from us"}
+                    failed += 1
+                    continue  # Skip si LLM fail (guard a déjà vérifié que last message = prospect)
 
                 action = strategy.get('conversation_action', 'skip')
                 action_reason = strategy.get('action_reason', 'N/A')
