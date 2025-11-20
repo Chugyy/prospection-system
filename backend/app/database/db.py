@@ -221,6 +221,21 @@ async def init_db():
         """)
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_daily_metrics_date ON daily_metrics(date DESC)")
 
+        # Run migrations
+        import os
+        migrations_dir = os.path.join(os.path.dirname(__file__), "migrations")
+        if os.path.exists(migrations_dir):
+            migration_files = sorted([f for f in os.listdir(migrations_dir) if f.endswith(".sql")])
+            for migration_file in migration_files:
+                migration_path = os.path.join(migrations_dir, migration_file)
+                try:
+                    with open(migration_path, 'r') as f:
+                        migration_sql = f.read()
+                    await conn.execute(migration_sql)
+                    print(f"✅ Migration applied: {migration_file}")
+                except Exception as e:
+                    print(f"⚠️  Migration {migration_file} skipped or already applied: {e}")
+
         print("Database initialized successfully")
     finally:
         await conn.close()
